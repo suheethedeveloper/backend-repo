@@ -1,12 +1,13 @@
 import fs from 'fs';
-require("dotenv").config();
-const express = require("express");
-const mongoose = require("mongoose");
-const cors = require("cors");
-const jwt = require("jsonwebtoken");
-const multer = require("multer");
-const path = require("path");
-const bcrypt = require("bcryptjs");
+import dotenv from 'dotenv';
+dotenv.config();
+import express from 'express';
+import mongoose from 'mongoose';
+import cors from 'cors';
+import jwt from 'jsonwebtoken';
+import multer from 'multer';
+import path from 'path';
+import bcrypt from 'bcryptjs';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
