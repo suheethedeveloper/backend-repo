@@ -209,7 +209,7 @@ app.post("/upload", upload.single('product'), (req, res) => {
   if (!req.file) return res.status(400).json({ success: 0, message: "No file uploaded" });
   res.json({
     success: 1,
-    image_url: `http://localhost:${PORT}/images/${req.file.filename}`
+    image_url: `https://backend-repo-op0f.onrender.com/images/${req.file.filename}`
   });
 });
 
