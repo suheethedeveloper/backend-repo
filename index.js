@@ -1,3 +1,4 @@
+import fs from 'fs';
 require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
@@ -21,8 +22,19 @@ app.use(cors());
 mongoose.connect(process.env.MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
+  retryWrites: true,
+  w: 'majority'
 }).then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB connection failed:", err));
+  .catch((err) => {
+    console.error("❌ MongoDB connection failed:", err);
+    // Retry after 5 seconds
+    setTimeout(() => mongoose.connect(process.env.MONGO_URI), 5000);
+  });
+
+const uploadDir = path.join(__dirname, 'upload/images');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
 
 // Models
 const Product = mongoose.model("Product", {
@@ -93,6 +105,14 @@ const Order = mongoose.model("Order", {
     default: Date.now
   }
 });
+
+app.use(cors({
+  origin: '*', // or specific domain like 'https://admin.bbigmart.com'
+  methods: ['GET', 'POST', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'auth-token']
+}));
+
+app.get('/favicon.ico', (req, res) => res.status(204));
 
 // Create Order
 app.post('/api/orders', async (req, res) => {
@@ -207,9 +227,13 @@ app.get("/", (req, res) => res.send("✅ Express server running"));
 
 app.post("/upload", upload.single('product'), (req, res) => {
   if (!req.file) return res.status(400).json({ success: 0, message: "No file uploaded" });
+  
+  // Use environment variable for base URL
+  const baseUrl = process.env.RENDER_EXTERNAL_URL || `https://${process.env.RENDER_INSTANCE_NAME}.onrender.com`;
+  
   res.json({
     success: 1,
-    image_url: `https://backend-repo-op0f.onrender.com/images/${req.file.filename}`
+    image_url: `${baseUrl}/images/${req.file.filename}`
   });
 });
 
@@ -277,9 +301,17 @@ app.post('/clearcart', fetchUser, async (req, res) => {
   }
 });
 
+// Update product endpoints to use absolute URLs
 app.get('/allproducts', async (_, res) => {
   const products = await Product.find();
-  res.json(products);
+  const baseUrl = process.env.RENDER_EXTERNAL_URL;
+  
+  const updatedProducts = products.map(p => ({
+    ...p._doc,
+    image: p.image.includes('http') ? p.image : `${baseUrl}${p.image}`
+  }));
+  
+  res.json(updatedProducts);
 });
 
 app.get('/newcollections', async (req, res) => {
