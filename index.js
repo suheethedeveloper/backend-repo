@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET;
 const adminEmail = process.env.ADMIN_EMAIL;
 const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH;
-
+const baseUrl = process.env.RENDER_EXTERNAL_URL || 'https://backend-repo-op0f.onrender.com';
 
 app.use(express.json());
 app.use(cors());
@@ -313,9 +313,9 @@ app.get('/allproducts', async (_, res) => {
   const baseUrl = process.env.RENDER_EXTERNAL_URL;
   
   const updatedProducts = products.map(p => ({
-    ...p._doc,
-    image: p.image.includes('http') ? p.image : `${baseUrl}${p.image}`
-  }));
+  ...p._doc,
+  image: p.image.includes('http') ? p.image : `${baseUrl}${p.image}`
+}));
   
   res.json(updatedProducts);
 });
