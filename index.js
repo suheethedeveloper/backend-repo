@@ -113,7 +113,7 @@ const Order = mongoose.model("Order", {
 });
 
 app.use(cors({
-  origin: 'https://www.bbigmart.com', // or specific domain like 'https://admin.bbigmart.com'
+  origin: ['https://www.bbigmart.com', 'https://bbigmart.com', 'https://admin.bbigmart.com'],
   methods: ['GET', 'POST', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'auth-token']
 }));
