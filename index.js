@@ -38,20 +38,24 @@ const allowedOrigins = [
   'https://www.bbigmart.com',
   'https://bbigmart.com',
   'https://admin.bbigmart.com',
-  'http://localhost:3000' // For local testing
+  'http://localhost:4000' // For local testing
 ];
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.error(`🚫 CORS blocked: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = `CORS policy blocks access from: ${origin}`;
+      console.error(msg);
+      return callback(new Error(msg), false);
     }
+    return callback(null, true);
   },
-  methods: ['GET', 'POST', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'auth-token']
+  credentials: true, // Important for cookies/sessions
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'auth-token']
 }));
 
 // Force HTTPS in production
@@ -81,8 +85,20 @@ connectDB();
 
 // Ensure upload directory exists
 const uploadDir = path.join(__dirname, 'upload/images');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
+
+// Create upload directory if it doesn't exist
+try {
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+    console.log(`✅ Created upload directory: ${uploadDir}`);
+  }
+  
+  // Test write permissions
+  fs.accessSync(uploadDir, fs.constants.W_OK);
+  console.log(`✅ Upload directory is writable: ${uploadDir}`);
+} catch (err) {
+  console.error(`❌ Upload directory error: ${err.message}`);
+  process.exit(1);
 }
 
 // Models
@@ -156,6 +172,20 @@ const Order = mongoose.model("Order", {
 });
 
 app.get('/favicon.ico', (req, res) => res.status(204));
+
+app.use((err, req, res, next) => {
+  console.error('🚨 Error:', err.stack);
+  
+  const statusCode = err.statusCode || 500;
+  const message = err.message || 'Internal Server Error';
+  
+  res.status(statusCode).json({
+    success: false,
+    status: statusCode,
+    message: message,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
 
 // Create Order
 app.post('/api/orders', async (req, res) => {
@@ -255,12 +285,12 @@ app.use('/images', express.static('upload/images'));
 app.get("/", (req, res) => res.send("✅ Express server running"));
 
 app.post("/upload", upload.single('product'), (req, res) => {
-  if (!req.file) return res.status(400).json({ success: 0, message: "No file uploaded" });
-  
-  // Use Render URL directly
+  if (!req.file) {
+    return res.status(400).json({ success: 0, message: "No file uploaded" });
+  }
   res.json({
     success: 1,
-    image_url: `https://backend-repo-op0f.onrender.com/images/${req.file.filename}`
+    image_url: `${getBaseUrl()}/images/${req.file.filename}`
   });
 });
 
@@ -289,9 +319,10 @@ app.post('/removeproduct', async (req, res) => {
 
 // Update product endpoints with fixed image URLs
 const getBaseUrl = () => {
-  return process.env.NODE_ENV === 'production' 
-    ? 'https://backend-repo-op0f.onrender.com' 
-    : `http://localhost:${PORT}`;
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://backend-repo-op0f.onrender.com';
+  }
+  return `http://localhost:${PORT}`;
 };
 
 app.get('/allproducts', async (_, res) => {
@@ -348,22 +379,60 @@ app.post('/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     
-    if (email !== adminEmail) {
-      console.log(`Admin login attempt failed: Incorrect email (${email})`);
-      return res.status(401).json({ success: false, errors: "Invalid admin credentials" });
+    // Basic validation
+    if (!email || !password) {
+      return res.status(400).json({ 
+        success: false, 
+        errors: "Email and password are required" 
+      });
     }
 
+    // Check email
+    if (email !== adminEmail) {
+      console.log(`Admin login attempt with wrong email: ${email}`);
+      return res.status(401).json({ 
+        success: false, 
+        errors: "Invalid credentials" 
+      });
+    }
+
+    // Check password
     const isMatch = await bcrypt.compare(password, adminPasswordHash);
     if (!isMatch) {
-      console.log('Admin login attempt failed: Incorrect password');
-      return res.status(401).json({ success: false, errors: "Invalid admin credentials" });
+      console.log('Admin login attempt with wrong password');
+      return res.status(401).json({ 
+        success: false, 
+        errors: "Invalid credentials" 
+      });
     }
 
-    const token = jwt.sign({ user: { email, role: 'admin' } }, JWT_SECRET);
-    res.json({ success: true, token });
+    // Generate token
+    const token = jwt.sign(
+      { 
+        user: { 
+          email: adminEmail, 
+          role: 'admin',
+          id: 'admin' // Add a static ID for admin
+        } 
+      }, 
+      JWT_SECRET,
+      { expiresIn: '8h' } // Token expiration
+    );
+
+    res.json({ 
+      success: true, 
+      token,
+      user: {
+        email: adminEmail,
+        role: 'admin'
+      }
+    });
   } catch (err) {
     console.error('Admin login error:', err);
-    res.status(500).json({ success: false, errors: "Server error" });
+    res.status(500).json({ 
+      success: false, 
+      errors: "Server error during login" 
+    });
   }
 });
 
