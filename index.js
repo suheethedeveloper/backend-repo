@@ -19,24 +19,67 @@ const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET;
 const adminEmail = process.env.ADMIN_EMAIL;
 const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH;
-const baseUrl = process.env.RENDER_EXTERNAL_URL || 'https://backend-repo-op0f.onrender.com';
+
+// Validate critical environment variables
+if (!JWT_SECRET) {
+  console.error("❌ FATAL: JWT_SECRET missing");
+  process.exit(1);
+}
+
+if (!adminEmail || !adminPasswordHash) {
+  console.error("❌ FATAL: ADMIN credentials missing");
+  process.exit(1);
+}
 
 app.use(express.json());
-app.use(cors());
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-  retryWrites: true,
-  w: 'majority'
-}).then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => {
-    console.error("❌ MongoDB connection failed:", err);
-    // Retry after 5 seconds
-    setTimeout(() => mongoose.connect(process.env.MONGO_URI), 5000);
+// CORS Configuration
+const allowedOrigins = [
+  'https://www.bbigmart.com',
+  'https://bbigmart.com',
+  'https://admin.bbigmart.com',
+  'http://localhost:3000' // For local testing
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.error(`🚫 CORS blocked: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'auth-token']
+}));
+
+// Force HTTPS in production
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    if (req.headers['x-forwarded-proto'] !== 'https') {
+      return res.redirect('https://' + req.headers.host + req.url);
+    }
+    next();
   });
+}
 
+// MongoDB Connection with improved retry logic
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    });
+    console.log("✅ MongoDB connected");
+  } catch (err) {
+    console.error("❌ MongoDB connection failed:", err.message);
+    setTimeout(connectDB, 5000); // Retry every 5 seconds
+  }
+};
+connectDB();
+
+// Ensure upload directory exists
 const uploadDir = path.join(__dirname, 'upload/images');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -105,18 +148,12 @@ const Order = mongoose.model("Order", {
     enum: ['cash', 'card', 'bank'],
     default: 'cash'
   },
-  bankTransferCode: { type: String, required: false }, // Added bank transfer code
+  bankTransferCode: { type: String, required: false },
   date: {
     type: Date,
     default: Date.now
   }
 });
-
-app.use(cors({
-  origin: ['https://www.bbigmart.com', 'https://bbigmart.com', 'https://admin.bbigmart.com'],
-  methods: ['GET', 'POST', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'auth-token']
-}));
 
 app.get('/favicon.ico', (req, res) => res.status(204));
 
@@ -204,20 +241,6 @@ app.patch('/api/orders/:id', async (req, res) => {
   }
 });
 
-// Delete Order (Admin only)
-app.delete('/api/orders/:id', async (req, res) => {
-  try {
-    const order = await Order.findByIdAndDelete(req.params.id);
-    if (!order) {
-      return res.status(404).json({ error: 'Захиалга олдсонгүй' });
-    }
-    res.json({ message: 'Захиалга устгагдлаа' });
-  } catch (err) {
-    console.error('Error deleting order:', err);
-    res.status(500).json({ error: 'Захиалгыг устгах үед алдаа гарлаа' });
-  }
-});
-
 // File upload setup
 const storage = multer.diskStorage({
   destination: './upload/images',
@@ -234,12 +257,10 @@ app.get("/", (req, res) => res.send("✅ Express server running"));
 app.post("/upload", upload.single('product'), (req, res) => {
   if (!req.file) return res.status(400).json({ success: 0, message: "No file uploaded" });
   
-  // Use environment variable for base URL
-  const baseUrl = process.env.RENDER_EXTERNAL_URL || `https://${process.env.RENDER_INSTANCE_NAME}.onrender.com`;
-  
+  // Use Render URL directly
   res.json({
     success: 1,
-    image_url: `${baseUrl}/images/${req.file.filename}`
+    image_url: `https://backend-repo-op0f.onrender.com/images/${req.file.filename}`
   });
 });
 
@@ -266,78 +287,84 @@ app.post('/removeproduct', async (req, res) => {
   }
 });
 
-app.delete('/api/orders/:id', async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ error: 'Захиалга олдсонгүй' });
-    }
-    
-    // Only allow deletion of delivered orders
-    if (order.status !== 'delivered') {
-      return res.status(400).json({ 
-        error: 'Зөвхөн хүргэгдсэн захиалгыг устгах боломжтой' 
-      });
-    }
+// Update product endpoints with fixed image URLs
+const getBaseUrl = () => {
+  return process.env.NODE_ENV === 'production' 
+    ? 'https://backend-repo-op0f.onrender.com' 
+    : `http://localhost:${PORT}`;
+};
 
-    await Order.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Захиалга амжилттай устгагдлаа' });
-  } catch (err) {
-    console.error('Error deleting order:', err);
-    res.status(500).json({ error: 'Захиалгыг устгах үед алдаа гарлаа' });
-  }
-});
-
-app.post('/clearcart', fetchUser, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-
-    // Create empty cart
-    const emptyCart = {};
-    for (let i = 0; i <= 300; i++) {
-      emptyCart[i] = 0;
-    }
-
-    user.cartData = emptyCart;
-    await user.save();
-    res.send("Cart cleared");
-  } catch (err) {
-    console.error('Error clearing cart:', err);
-    res.status(500).json({ error: 'Failed to clear cart' });
-  }
-});
-
-// Update product endpoints to use absolute URLs
 app.get('/allproducts', async (_, res) => {
-  const products = await Product.find();
-  const baseUrl = process.env.RENDER_EXTERNAL_URL;
-  
-  const updatedProducts = products.map(p => ({
-  ...p._doc,
-  image: p.image.includes('http') ? p.image : `${baseUrl}${p.image}`
-}));
-  
-  res.json(updatedProducts);
+  try {
+    const products = await Product.find();
+    const baseUrl = getBaseUrl();
+    
+    const updatedProducts = products.map(p => ({
+      ...p._doc,
+      image: p.image.startsWith('http') ? p.image : `${baseUrl}${p.image}`
+    }));
+    
+    res.json(updatedProducts);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 app.get('/newcollections', async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 16;
   const skip = (page - 1) * limit;
+  const baseUrl = getBaseUrl();
 
   try {
     const products = await Product.find().sort({ date: -1 }).skip(skip).limit(limit);
     const total = await Product.countDocuments();
-    res.json({ products, total });
+    
+    const updatedProducts = products.map(p => ({
+      ...p._doc,
+      image: p.image.startsWith('http') ? p.image : `${baseUrl}${p.image}`
+    }));
+    
+    res.json({ products: updatedProducts, total });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-
 app.get('/popularinwomen', async (_, res) => {
+  const baseUrl = getBaseUrl();
   const women = await Product.find({ category: "women" }).limit(4);
-  res.json(women);
+  
+  const updatedWomen = women.map(p => ({
+    ...p._doc,
+    image: p.image.startsWith('http') ? p.image : `${baseUrl}${p.image}`
+  }));
+  
+  res.json(updatedWomen);
+});
+
+// Fixed admin login with proper validation
+app.post('/admin/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    if (email !== adminEmail) {
+      console.log(`Admin login attempt failed: Incorrect email (${email})`);
+      return res.status(401).json({ success: false, errors: "Invalid admin credentials" });
+    }
+
+    const isMatch = await bcrypt.compare(password, adminPasswordHash);
+    if (!isMatch) {
+      console.log('Admin login attempt failed: Incorrect password');
+      return res.status(401).json({ success: false, errors: "Invalid admin credentials" });
+    }
+
+    const token = jwt.sign({ user: { email, role: 'admin' } }, JWT_SECRET);
+    res.json({ success: true, token });
+  } catch (err) {
+    console.error('Admin login error:', err);
+    res.status(500).json({ success: false, errors: "Server error" });
+  }
 });
 
 // User Signup/Login
@@ -360,65 +387,82 @@ app.post('/signup', async (req, res) => {
   }
 });
 
-app.post('/admin/login', async (req, res) => {
-  const { email, password } = req.body;
-  
-  // Check email
-  if (email !== process.env.ADMIN_EMAIL) {
-    return res.status(401).json({ success: false, errors: "Invalid admin credentials" });
-  }
-
-  // Check password against hashed version
-  const isMatch = await bcrypt.compare(password, process.env.ADMIN_PASSWORD_HASH); // Fixed env variable
-  if (!isMatch) {
-    return res.status(401).json({ success: false, errors: "Invalid admin credentials" });
-  }
-
-  // Generate token
-  const token = jwt.sign({ user: { email, role: 'admin' } }, process.env.JWT_SECRET);
-  res.json({ success: true, token });
-});
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
-  const user = await User.findOne({ email });
-  if (!user) {
-    return res.status(401).json({ success: false, errors: "User not found" });
-  }
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({ success: false, errors: "User not found" });
+    }
 
-  const isMatch = await bcrypt.compare(password, user.password);
-  if (!isMatch) {
-    return res.status(401).json({ success: false, errors: "Incorrect password" });
-  }
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, errors: "Incorrect password" });
+    }
 
-  const token = jwt.sign({ user: { id: user._id } }, JWT_SECRET);
-  res.json({ success: true, token });
+    const token = jwt.sign({ user: { id: user._id } }, JWT_SECRET);
+    res.json({ success: true, token });
+  } catch (err) {
+    res.status(500).json({ success: false, errors: err.message });
+  }
 });
 
 // Cart APIs
 app.post('/addtocart', fetchUser, async (req, res) => {
-  const { item } = req.body;
-  const user = await User.findById(req.user.id);
-  user.cartData[item] = (user.cartData[item] || 0) + 1;
-  await user.save();
-  res.send("Added");
+  try {
+    const { item } = req.body;
+    const user = await User.findById(req.user.id);
+    user.cartData[item] = (user.cartData[item] || 0) + 1;
+    await user.save();
+    res.send("Added");
+  } catch (err) {
+    console.error('Add to cart error:', err);
+    res.status(500).json({ error: 'Failed to add to cart' });
+  }
 });
 
 app.post('/removefromcart', fetchUser, async (req, res) => {
-  const { item } = req.body;
-  const user = await User.findById(req.user.id);
-  if (user.cartData[item] > 0) user.cartData[item] -= 1;
-  await user.save();
-  res.send("Removed");
+  try {
+    const { item } = req.body;
+    const user = await User.findById(req.user.id);
+    if (user.cartData[item] > 0) user.cartData[item] -= 1;
+    await user.save();
+    res.send("Removed");
+  } catch (err) {
+    console.error('Remove from cart error:', err);
+    res.status(500).json({ error: 'Failed to remove from cart' });
+  }
 });
 
 app.post('/getcart', fetchUser, async (req, res) => {
-  const user = await User.findById(req.user.id);
-  res.json(user.cartData);
+  try {
+    const user = await User.findById(req.user.id);
+    res.json(user.cartData);
+  } catch (err) {
+    console.error('Get cart error:', err);
+    res.status(500).json({ error: 'Failed to get cart' });
+  }
 });
 
+app.post('/clearcart', fetchUser, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    const emptyCart = {};
+    for (let i = 0; i <= 300; i++) {
+      emptyCart[i] = 0;
+    }
+    user.cartData = emptyCart;
+    await user.save();
+    res.send("Cart cleared");
+  } catch (err) {
+    console.error('Clear cart error:', err);
+    res.status(500).json({ error: 'Failed to clear cart' });
+  }
+});
 
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌐 Base URL: ${getBaseUrl()}`);
 });
